@@ -1,0 +1,9 @@
+{
+  "appId": "org.iptvorg.playerviewer",
+  "appName": "IPTV Viewer",
+  "webDir": "../viewer",
+  "server": {
+    "androidScheme": "https"
+  }
+}
+

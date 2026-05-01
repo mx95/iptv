@@ -15,6 +15,8 @@
     "sites:update": "tsx scripts/commands/sites/update.ts",
     "guides:update": "tsx scripts/commands/guides/update.ts",
     "grab": "tsx scripts/commands/epg/grab.ts",
+    "viewer": "tsx scripts/viewer-server.ts",
+    "mobile:sync": "cd mobile && npm install && npx cap sync",
     "lint": "npx eslint \"{scripts,tests,sites}/**/*.{ts,mts,js}\"",
     "test": "cross-env TZ=Pacific/Nauru npx jest --runInBand",
     "postinstall": "npm run api:load",

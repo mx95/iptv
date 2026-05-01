@@ -1,0 +1,20 @@
+{
+  "name": "iptv-viewer-shell",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Capacitor shell around ../viewer — run npm run viewer for the Node API alongside TV browsers",
+  "scripts": {
+    "sync": "cap sync",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  }
+}
+
