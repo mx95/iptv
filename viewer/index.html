@@ -173,9 +173,92 @@
       .nav-item[data-current='true'] {
         color: #fff;
         background: var(--accent-soft);
-        box-shadow: inset 0 0 0 1px var(--accent-line);
+        box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 24px var(--accent-glow);
+      }
+
+      .nav-search-dropdown,
+      .browse-search-dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        left: auto;
+        width: min(400px, calc(100vw - 32px));
+        max-height: min(70vh, 420px);
+        overflow-y: auto;
+        border-radius: var(--r-md);
+        background: rgba(17, 20, 29, 0.97);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: var(--shadow-lg);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        padding: var(--space-2);
+        z-index: 80;
+      }
+      .nav-search-dropdown[hidden],
+      .browse-search-dropdown[hidden] {
+        display: none !important;
+        pointer-events: none;
+        visibility: hidden;
+      }
+      .browse-search-dropdown {
+        left: 0;
+        right: auto;
+        width: min(380px, calc(100vw - 48px));
+      }
+      .search-dd-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: var(--r-sm);
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: background var(--t-fast);
+      }
+      .search-dd-item:hover,
+      .search-dd-item:focus-visible {
+        background: rgba(255,255,255,0.06);
+        outline: none;
+      }
+      .search-dd-thumb {
+        width: 40px;
+        height: 56px;
+        border-radius: 6px;
+        object-fit: cover;
+        background: var(--surface-2);
+        flex-shrink: 0;
+      }
+      .search-dd-live {
+        width: 56px;
+        height: 32px;
+        border-radius: 6px;
+        object-fit: cover;
+      }
+      .search-dd-meta { min-width: 0; flex: 1; }
+      .search-dd-title {
+        font-size: 0.88rem;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .search-dd-sub {
+        font-size: 0.72rem;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .nav-spacer { flex: 1; }
+      .nav-search-wrap {
+        position: relative;
+        z-index: 40;
+      }
 
       .nav-search {
         position: relative;
@@ -184,16 +267,22 @@
       }
       .nav-search input {
         height: 38px;
-        width: 220px;
+        width: 180px;
         border-radius: 999px;
         border: 1px solid var(--border);
         background: rgba(255,255,255,0.04);
         color: var(--text);
         padding: 0 14px 0 36px;
         font-size: 0.9rem;
-        transition: width var(--t-base), border-color var(--t-fast), background var(--t-fast);
+        transition: width var(--t-base), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-base);
       }
-      .nav-search input:focus { width: 300px; border-color: var(--accent-line); background: rgba(255,255,255,0.06); }
+      .nav-search input:focus {
+        width: min(360px, 42vw);
+        border-color: rgba(139, 92, 246, 0.55);
+        background: rgba(255,255,255,0.06);
+        box-shadow: 0 0 0 1px rgba(139,92,246,0.25), 0 12px 40px rgba(0,0,0,0.45);
+        outline: none;
+      }
       .nav-search .ico {
         position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
         opacity: 0.7; pointer-events: none;
@@ -425,8 +514,8 @@
       }
       .carousel-scroll {
         display: flex;
-        gap: var(--space-3);
-        padding: var(--space-2) var(--space-8) var(--space-4);
+        gap: 14px;
+        padding: var(--space-2) var(--space-8) var(--space-5);
         overflow-x: auto;
         scroll-snap-type: x mandatory;
         scroll-padding-left: var(--space-8);
@@ -457,122 +546,220 @@
       .carousel-arrow.right { right: 12px; }
       .carousel:hover .carousel-arrow { opacity: 1; }
 
-      /* ─────────────────────────  Card / Poster  ───────────────────────── */
+      /* ─────────────────────────  Card — poster-first (OTT)  ───────────── */
       .card {
-        --card-w: 256px;
+        --card-w: 200px;
         width: var(--card-w);
         cursor: pointer;
         background: transparent;
         border: 0;
         padding: 0;
         text-align: left;
-        display: flex; flex-direction: column;
-        gap: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         font-family: inherit;
         color: var(--text);
-        transition: transform var(--t-base);
+        position: relative;
+        transition: transform 185ms cubic-bezier(0.4, 0, 0.2, 1), filter 185ms ease;
+        will-change: transform;
       }
+      .card:focus-visible {
+        outline: none;
+      }
+      :root:not([data-reduce-motion='true']) .card:hover,
+      :root:not([data-reduce-motion='true']) .card:focus-visible {
+        transform: scale(1.05);
+        z-index: 3;
+      }
+      :root:not([data-reduce-motion='true']) .carousel-scroll .card:hover,
+      :root:not([data-reduce-motion='true']) .carousel-scroll .card:focus-visible {
+        filter: drop-shadow(0 16px 32px rgba(0, 0, 0, 0.55));
+      }
+
+      /* Broadcast (live): wide tile */
+      .card--live .thumb {
+        aspect-ratio: 16 / 9;
+      }
+      /* Movies & series: Netflix-style poster */
+      .card--poster .thumb {
+        aspect-ratio: 2 / 3;
+      }
+
       .card .thumb {
         position: relative;
-        aspect-ratio: 16 / 9;
-        min-height: 144px;
-        border-radius: var(--r-md);
+        border-radius: 10px;
         overflow: hidden;
-        background:
-          radial-gradient(ellipse at 30% 20%, rgba(139,92,246,0.18), transparent 60%),
-          linear-gradient(135deg, #1c2030 0%, #11141d 100%);
-        box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(255,255,255,0.04);
-        transition: box-shadow var(--t-base), transform var(--t-base);
+        background: linear-gradient(160deg, #252938 0%, #12151f 48%, #0a0c12 100%);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.42);
+        transition: box-shadow 185ms ease;
       }
+      :root:not([data-reduce-motion='true']) .card:hover .thumb,
+      :root:not([data-reduce-motion='true']) .card:focus-visible .thumb {
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.55),
+          0 0 28px rgba(139, 92, 246, 0.12);
+      }
+
       .card .thumb img {
-        position: absolute; inset: 0;
-        width: 100%; height: 100%;
-        object-fit: contain;
-        background: rgba(7,8,13,0.55);
-        padding: 14%;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center top;
+        background: transparent;
+        padding: 0;
         opacity: 0;
-        transition: opacity var(--t-base);
+        transition: opacity 200ms ease, transform 300ms ease;
       }
-      .card .thumb img.loaded { opacity: 1; }
+      .card .thumb img.loaded {
+        opacity: 1;
+      }
+      :root:not([data-reduce-motion='true']) .card:hover .thumb img.loaded,
+      :root:not([data-reduce-motion='true']) .card:focus-visible .thumb img.loaded {
+        transform: scale(1.03);
+      }
+
       .card .thumb .fallback {
-        position: absolute; inset: 0;
-        display: grid; place-items: center;
-        color: rgba(255,255,255,0.55);
-        font-size: 2.2rem;
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: rgba(255, 255, 255, 0.45);
+        font-size: 1.85rem;
         font-weight: 700;
-        letter-spacing: -0.02em;
-        text-shadow: 0 2px 12px rgba(0,0,0,0.4);
       }
       .card .thumb .fallback .initials {
-        font-size: 1.4rem;
+        font-size: 1.25rem;
         font-weight: 800;
         letter-spacing: 0.02em;
-        background: linear-gradient(135deg, #fff, rgba(255,255,255,0.55));
+        background: linear-gradient(135deg, #fff, rgba(255, 255, 255, 0.45));
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
-      .card .thumb::after {
-        content: '';
-        position: absolute; inset: auto 0 0 0; height: 50%;
-        background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.65) 100%);
+
+      .card .thumb-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
         opacity: 0;
-        transition: opacity var(--t-base);
         pointer-events: none;
+        transition: opacity 175ms ease;
       }
-      .card:hover .thumb { transform: translateY(-4px) scale(1.02); box-shadow: var(--shadow-md); }
-      .card:hover .thumb::after,
-      .card:focus-visible .thumb::after { opacity: 1; }
+      :root:not([data-reduce-motion='true']) .card:hover .thumb-overlay,
+      :root:not([data-reduce-motion='true']) .card:focus-visible .thumb-overlay {
+        opacity: 1;
+      }
+      .thumb-overlay-grad {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, transparent 0%, transparent 32%, rgba(0, 0, 0, 0.45) 58%, rgba(0, 0, 0, 0.92) 100%);
+      }
+      .thumb-overlay-inner {
+        position: relative;
+        padding: 10px 11px 12px;
+        z-index: 1;
+      }
+      .thumb-overlay-title {
+        font-size: 0.88rem;
+        font-weight: 700;
+        line-height: 1.28;
+        color: #fff;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        overflow: hidden;
+      }
+      .thumb-overlay-sub {
+        margin-top: 4px;
+        font-size: 0.72rem;
+        color: rgba(255, 255, 255, 0.75);
+        line-height: 1.35;
+        text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
       .card .play-overlay {
         position: absolute;
         inset: 0;
-        display: grid; place-items: center;
+        display: grid;
+        place-items: center;
         opacity: 0;
-        transition: opacity var(--t-base);
-        z-index: 1;
+        transition: opacity 175ms ease;
+        z-index: 5;
+        pointer-events: none;
       }
-      .card:hover .play-overlay,
-      .card:focus-visible .play-overlay { opacity: 1; }
+      :root:not([data-reduce-motion='true']) .card:hover .play-overlay,
+      :root:not([data-reduce-motion='true']) .card:focus-visible .play-overlay {
+        opacity: 1;
+      }
       .card .play-overlay-circle {
-        width: 56px; height: 56px;
+        width: 52px;
+        height: 52px;
         border-radius: 50%;
-        background: rgba(255,255,255,0.96);
+        background: rgba(255, 255, 255, 0.95);
         color: #0a0c14;
-        display: grid; place-items: center;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+        display: grid;
+        place-items: center;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
       }
-      .card .play-overlay-circle svg { width: 26px; height: 26px; }
+      .card .play-overlay-circle svg {
+        width: 24px;
+        height: 24px;
+      }
 
       .card .progress-bar {
         position: absolute;
-        bottom: 0; left: 0; right: 0;
+        bottom: 0;
+        left: 0;
+        right: 0;
         height: 3px;
-        background: rgba(255,255,255,0.18);
-        z-index: 2;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 6;
       }
       .card .progress-bar > span {
         display: block;
         height: 100%;
         background: var(--accent);
+        box-shadow: 0 0 10px rgba(139, 92, 246, 0.6);
       }
       .card .badge-fav {
-        position: absolute; top: 8px; right: 8px;
-        z-index: 3;
-        width: 30px; height: 30px;
+        position: absolute;
+        top: 7px;
+        right: 7px;
+        z-index: 7;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        background: rgba(7,8,13,0.7);
-        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(7, 8, 13, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         color: #fff;
-        display: grid; place-items: center;
+        display: grid;
+        place-items: center;
         cursor: pointer;
         opacity: 0;
         transition: opacity var(--t-fast), transform var(--t-fast), background var(--t-fast);
       }
       .card:hover .badge-fav,
       .card:focus-within .badge-fav,
-      .card .badge-fav[data-on='true'] { opacity: 1; }
-      .card .badge-fav:hover { transform: scale(1.1); background: rgba(7,8,13,0.85); }
-      .card .badge-fav[data-on='true'] { color: #fbbf24; }
+      .card .badge-fav[data-on='true'] {
+        opacity: 1;
+      }
+      .card .badge-fav:hover {
+        transform: scale(1.08);
+        background: rgba(7, 8, 13, 0.88);
+      }
+      .card .badge-fav[data-on='true'] {
+        color: #fbbf24;
+      }
       button.badge-fav,
       button.badge-info {
         font: inherit;
@@ -582,37 +769,47 @@
       }
 
       .card .badge-info {
-        position: absolute; bottom: 8px; left: 8px;
-        z-index: 4;
-        width: 30px; height: 30px;
+        position: absolute;
+        bottom: 7px;
+        left: 7px;
+        z-index: 7;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        background: rgba(7,8,13,0.75);
-        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(7, 8, 13, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         color: #fff;
-        display: grid; place-items: center;
+        display: grid;
+        place-items: center;
         cursor: pointer;
-        font-size: 0.78rem;
+        font-size: 0.74rem;
         font-weight: 800;
         opacity: 0;
         transition: opacity var(--t-fast), transform var(--t-fast), background var(--t-fast);
       }
       .card:hover .badge-info,
-      .card:focus-within .badge-info { opacity: 1; }
-      .card .badge-info:hover { transform: scale(1.08); background: rgba(7,8,13,0.9); }
+      .card:focus-within .badge-info {
+        opacity: 1;
+      }
+      .card .badge-info:hover {
+        transform: scale(1.06);
+      }
 
       .card .kind-pill {
-        position: absolute; top: 8px; left: 8px;
-        z-index: 2;
-        background: rgba(7,8,13,0.78);
-        border: 1px solid rgba(255,255,255,0.08);
-        backdrop-filter: blur(4px);
-        color: var(--text-dim);
-        font-size: 0.66rem;
+        position: absolute;
+        top: 7px;
+        left: 7px;
+        z-index: 8;
+        background: rgba(7, 8, 13, 0.65);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(6px);
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 0.62rem;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.09em;
         padding: 3px 7px;
-        border-radius: 4px;
+        border-radius: 6px;
       }
       .card .kind-pill.live { color: #fff; background: rgba(239,68,68,0.85); border-color: rgba(239,68,68,0.6); }
       .card .kind-pill.live::before {
@@ -625,11 +822,14 @@
       @keyframes pulse { 50% { opacity: 0.4; } }
 
       .card .meta {
-        display: flex; flex-direction: column; gap: 2px;
-        padding: 0 2px;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 0 1px;
+        min-height: 2.5rem;
       }
       .card .name {
-        font-size: 0.95rem;
+        font-size: 0.86rem;
         font-weight: 600;
         line-height: 1.3;
         white-space: nowrap;
@@ -637,17 +837,26 @@
         text-overflow: ellipsis;
       }
       .card .sub {
-        font-size: 0.78rem;
+        font-size: 0.72rem;
         color: var(--muted);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        opacity: 0.9;
       }
 
-      .card.is-playing .thumb { box-shadow: 0 0 0 2px var(--accent), var(--shadow-md); }
+      .card.is-playing .thumb {
+        box-shadow:
+          0 0 0 2px var(--accent),
+          0 10px 32px rgba(139, 92, 246, 0.22);
+      }
       .card.is-playing .name { color: var(--accent); }
 
-      /* Skeletons */
+      /* Skeletons — mirror poster grid */
+      .card.skeleton .thumb {
+        aspect-ratio: 2 / 3;
+        min-height: 0;
+      }
       .card.skeleton .thumb,
       .card.skeleton .name,
       .card.skeleton .sub {
@@ -698,48 +907,61 @@
         background: linear-gradient(180deg, var(--bg) 0%, rgba(7,8,13,0.85) 100%);
         backdrop-filter: blur(8px);
       }
-      .chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
+      .chip-group { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       .chip {
-        background: rgba(255,255,255,0.04);
-        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.06);
         color: var(--text-dim);
-        padding: 8px 14px;
-        font-size: 0.85rem;
+        padding: 6px 14px;
+        font-size: 0.8rem;
         font-weight: 600;
         border-radius: 999px;
         cursor: pointer;
-        transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-        display: inline-flex; align-items: center; gap: 6px;
+        transition: background 175ms ease, border-color 175ms ease, color 175ms ease, box-shadow 175ms ease,
+          transform 175ms ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 0;
       }
-      .chip:hover { background: rgba(255,255,255,0.07); color: var(--text); }
+      .chip:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.12);
+      }
       .chip[data-active='true'] {
-        background: var(--accent);
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
         color: #fff;
         border-color: transparent;
+        box-shadow: 0 0 20px rgba(139, 92, 246, 0.35);
       }
       .chip .count {
-        font-size: 0.7rem;
-        opacity: 0.75;
-        background: rgba(0,0,0,0.18);
-        padding: 1px 6px;
-        border-radius: 999px;
+        display: none;
       }
-      .chip[data-active='true'] .count { background: rgba(0,0,0,0.25); }
 
       .toolbar-spacer { flex: 1; }
       .toolbar-search {
         position: relative;
-        display: flex; align-items: center;
+        display: flex;
+        align-items: center;
+        z-index: 30;
       }
       .toolbar-search input {
-        height: 38px;
-        width: 240px;
-        background: rgba(255,255,255,0.04);
-        border: 1px solid var(--border);
+        height: 36px;
+        width: 200px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         color: var(--text);
         border-radius: 999px;
-        padding: 0 14px 0 36px;
-        font-size: 0.9rem;
+        padding: 0 12px 0 34px;
+        font-size: 0.85rem;
+        transition: width 185ms ease, border-color 175ms ease, background 175ms ease, box-shadow 175ms ease;
+      }
+      .toolbar-search input:focus {
+        width: min(320px, 36vw);
+        border-color: rgba(139, 92, 246, 0.45);
+        background: rgba(255, 255, 255, 0.06);
+        box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.15);
+        outline: none;
       }
       .toolbar-search .ico {
         position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
@@ -755,11 +977,15 @@
       /* Grid mode for searches/filtered view */
       .poster-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-        gap: var(--space-4);
+        grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+        gap: 14px;
         padding: 0 var(--space-8) var(--space-12);
       }
-      .poster-grid .card { width: 100%; }
+      .poster-grid .card {
+        width: 100%;
+        max-width: 220px;
+        margin: 0 auto;
+      }
 
       /* ─────────────────────────  Watch view (player)  ─────────────────── */
       .watch-shell {
@@ -1249,6 +1475,20 @@
       .detail-slot-title { font-weight: 600; margin-bottom: 4px; }
       .detail-slot-time { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
       .detail-slot-desc { font-size: 0.85rem; color: var(--text-dim); line-height: 1.45; }
+      .detail-series-body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+        max-height: min(260px, 42vh);
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      .detail-series-body .episode-pick {
+        text-align: left;
+        justify-content: flex-start;
+        font-size: 0.82rem;
+        line-height: 1.35;
+      }
       .detail-url {
         font-size: 0.72rem;
         color: var(--muted-soft);
@@ -1286,14 +1526,11 @@
         to { opacity: 1; transform: none; }
       }
 
-      /* ─────────────────────────  Continue card variant  ───────────────── */
-      .card.continue .thumb img { padding: 14%; }
-
       /* ─────────────────────────  Mobile  ──────────────────────────────── */
       @media (max-width: 880px) {
         .topnav { padding: 0 var(--space-4); gap: var(--space-2); }
-        .nav-search input { width: 140px; }
-        .nav-search input:focus { width: 200px; }
+        .nav-search input { width: 128px; }
+        .nav-search input:focus { width: min(300px, 72vw); }
         .nav-account .label { display: none; }
         .nav-list .nav-item.hide-mobile { display: none; }
 
@@ -1303,13 +1540,14 @@
         .poster-grid { padding-left: var(--space-5); padding-right: var(--space-5); }
         .watch-info { padding: var(--space-4) var(--space-5) 0; }
         .browse-toolbar { padding: var(--space-3) var(--space-5); }
-        .card { --card-w: 220px; }
+        .card { --card-w: 168px; }
+        .poster-grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
         .hero { padding: var(--space-6) var(--space-5) var(--space-8); min-height: 50vh; }
       }
 
       @media (max-width: 540px) {
         .nav-list { display: none; }
-        .card { --card-w: 200px; }
+        .card { --card-w: 148px; }
       }
     </style>
   </head>
@@ -1331,11 +1569,14 @@
       </nav>
       <div class="nav-spacer"></div>
 
-      <div class="nav-search" role="search">
-        <span class="ico" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        </span>
-        <input id="global-search" type="search" placeholder="Search channels, movies, shows" aria-label="Search" />
+      <div class="nav-search-wrap" id="nav-search-wrap">
+        <div class="nav-search" role="search">
+          <span class="ico" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </span>
+          <input id="global-search" type="search" placeholder="Search titles…" autocomplete="off" aria-label="Search" aria-controls="nav-search-dropdown" aria-expanded="false" />
+        </div>
+        <div id="nav-search-dropdown" class="nav-search-dropdown" role="listbox" aria-label="Quick results" hidden></div>
       </div>
 
       <button class="nav-account" id="nav-account" title="Switch account">
@@ -1384,7 +1625,7 @@
 
       <!-- BROWSE -->
       <section class="view" id="view-browse">
-        <div class="browse-toolbar">
+        <div class="browse-toolbar" id="browse-toolbar">
           <div class="chip-group" id="browse-chips">
             <button class="chip" data-kind="all">All <span class="count" data-kc="all">0</span></button>
             <button class="chip" data-kind="live">Live <span class="count" data-kc="live">0</span></button>
@@ -1397,7 +1638,8 @@
             <span class="ico" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             </span>
-            <input id="browse-search" type="search" placeholder="Search this library" aria-label="Search library" />
+            <input id="browse-search" type="search" placeholder="Filter this view…" autocomplete="off" aria-label="Search library" aria-controls="browse-search-dropdown" aria-expanded="false" />
+            <div id="browse-search-dropdown" class="browse-search-dropdown" role="listbox" aria-label="Matches" hidden></div>
           </div>
         </div>
 
@@ -1544,7 +1786,11 @@
 
             <div class="form-row" id="pl-grp-m3u-url">
               <label for="pl-m3u-url">M3U URL</label>
-              <input id="pl-m3u-url" type="url" placeholder="https://example.com/playlist.m3u" />
+              <input
+                id="pl-m3u-url"
+                type="url"
+                placeholder="https://…/playlist.m3u — or Xtream get.php?username=… link (loads via API)"
+              />
             </div>
 
             <div id="pl-grp-m3u-inline" hidden>
@@ -1560,8 +1806,13 @@
 
             <div id="pl-grp-xtream" hidden>
               <div class="form-row">
-                <label for="pl-xc-server">Server URL</label>
-                <input id="pl-xc-server" type="url" placeholder="https://provider.example.com:8080" />
+                <label for="pl-xc-server">Server URL or portal link</label>
+                <input
+                  id="pl-xc-server"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="http://host:port or full …/get.php?username=…&password=…"
+                />
               </div>
               <div class="form-row" style="margin-top: 10px;">
                 <label for="pl-xc-user">Username</label>
@@ -1766,6 +2017,10 @@
         <div class="detail-epg-block" id="detail-epg-block" hidden>
           <h4>Guide</h4>
           <div id="detail-epg-body"></div>
+        </div>
+        <div class="detail-epg-block detail-series-block" id="detail-series-block" hidden>
+          <h4>Episodes</h4>
+          <div class="detail-series-body" id="detail-series-body"></div>
         </div>
         <div class="detail-url" id="detail-url"></div>
         <div class="detail-actions">

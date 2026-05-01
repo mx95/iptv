@@ -1,4 +1,5 @@
 import { parseM3u } from './m3u.js'
+import { extractXtreamFromPortalUrl } from './xtream-portal-parse.js'
 import * as Pins from './pins.js'
 import { assignContentKind, filterByContentKind } from './m3u-kind.js'
 import {
@@ -50,7 +51,7 @@ function bind(id, evt, fn) {
 
 /** @typedef {'all' | 'live' | 'vod' | 'series'} KindFilter */
 /** @typedef {'home' | 'browse' | 'watch' | 'accounts' | 'account-editor' | 'settings'} AppRoute */
-/** @typedef {{ name: string; url: string; logo?: string; group?: string; kind?: 'live' | 'vod' | 'series'; tvgId?: string }} Ch */
+/** @typedef {{ name: string; url: string; logo?: string; group?: string; kind?: 'live' | 'vod' | 'series'; tvgId?: string; seriesId?: number }} Ch */
 
 const state = {
   /** @type {Ch[]} */ channels: [],
@@ -307,18 +308,8 @@ function startEpgClock() {
 function bindDetailModal() {
   bind('detail-backdrop', 'click', () => closeChannelDetail())
   bind('detail-close', 'click', () => closeChannelDetail())
-  bind('detail-play', 'click', () => {
-    if (!detailModalCh) return
-    const ch = detailModalCh
-    const kind = ch.kind || 'live'
-    let resumeAt = 0
-    if (kind !== 'live') {
-      const p = Progress.getProgress(ch.url)
-      if (p) resumeAt = p.position
-    }
-    closeChannelDetail()
-    openWatch(ch, { queue: sameRowQueue(ch), resumeAt })
-  })
+  bind('detail-play', 'click', () => { void onDetailPlayClick() })
+
   bind('detail-fav', 'click', () => {
     if (!detailModalCh) return
     Pins.toggleFavorite(detailModalCh)
@@ -344,6 +335,63 @@ function closeChannelDetail() {
 }
 
 /** @param {Ch} ch */
+async function loadDetailSeriesEpisodes(ch) {
+  const urlEl = $('detail-url')
+  const seriesBlock = $('detail-series-block')
+  const seriesBody = $('detail-series-body')
+  try {
+    const data = await fetchXtreamSeriesEpisodeData(ch)
+    const eps = Array.isArray(data.episodes) ? data.episodes : []
+    if (urlEl) {
+      if (!eps.length) urlEl.textContent = 'No episodes.'
+      else if (data.truncated)
+        urlEl.textContent = `${eps.length} of ${data.totalEpisodes} episodes (showing subset)`
+      else urlEl.textContent = `${eps.length} episode(s)`
+    }
+    if (seriesBody) seriesBody.innerHTML = ''
+    if (seriesBlock) seriesBlock.hidden = false
+    if (seriesBody) {
+      const cap = 100
+      for (const ep of eps.slice(0, cap)) {
+        const b = document.createElement('button')
+        b.className = 'btn btn-outline btn-sm episode-pick'
+        b.type = 'button'
+        b.textContent = `S${ep.season || '?'} E${ep.episode || '?'} — ${truncate(ep.title, 72)}`
+        b.addEventListener('click', () => {
+          const playCh = { ...ch, url: ep.url, name: `${ch.name} — ${ep.title}` }
+          closeChannelDetail()
+          openWatch(playCh, { queue: [], resumeAt: Progress.getProgress(ep.url)?.position || 0 })
+        })
+        seriesBody.appendChild(b)
+      }
+      if (eps.length > cap) {
+        const note = document.createElement('div')
+        note.className = 'detail-slot-desc'
+        note.textContent = `Showing ${cap} of ${eps.length} episodes. Narrow with search when browsing the library.`
+        seriesBody.appendChild(note)
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (urlEl) urlEl.textContent = msg
+    if (seriesBlock) seriesBlock.hidden = false
+    if (seriesBody) seriesBody.innerHTML = ''
+  }
+}
+
+async function onDetailPlayClick() {
+  if (!detailModalCh) return
+  const ch = detailModalCh
+  let resumeAt = 0
+  if ((ch.kind || 'live') !== 'live' && !isXtreamSeriesMarkerUrl(ch.url)) {
+    const p = Progress.getProgress(ch.url)
+    if (p) resumeAt = p.position
+  }
+  closeChannelDetail()
+  openWatch(ch, { queue: sameRowQueue(ch), resumeAt })
+}
+
+/** @param {Ch} ch */
 function openChannelDetail(ch) {
   detailModalCh = ch
   fillDetailModal(ch)
@@ -359,15 +407,31 @@ function fillDetailModal(ch) {
   const body = $('detail-epg-body')
   const urlEl = $('detail-url')
   const favBtn = /** @type {HTMLButtonElement | null} */ ($('detail-fav'))
+  const seriesBlock = $('detail-series-block')
+  const seriesBody = $('detail-series-body')
+
+  const isXtreamCatalogSeries =
+    (ch.kind || 'live') === 'series' &&
+    ch.seriesId != null &&
+    isXtreamSeriesMarkerUrl(ch.url)
+
+  if (seriesBody) seriesBody.innerHTML = ''
+  if (seriesBlock) seriesBlock.hidden = true
+
   if (t) t.textContent = ch.name
   if (meta) {
     meta.textContent = `${ch.group || 'Uncategorised'} · ${(ch.kind || 'live').toUpperCase()}`
     if (ch.tvgId) meta.textContent += ` · tvg-id ${ch.tvgId}`
   }
-  if (urlEl) urlEl.textContent = ch.url.length > 200 ? `${ch.url.slice(0, 120)}…` : ch.url
+
   const { now, next } = getCombinedEpg(ch)
+
   if (body && epb) {
-    if ((ch.kind || 'live') !== 'live' || (!now?.title && !next?.title)) {
+    if (
+      isXtreamCatalogSeries ||
+      (ch.kind || 'live') !== 'live' ||
+      (!now?.title && !next?.title)
+    ) {
       epb.hidden = true
       body.innerHTML = ''
     } else {
@@ -377,23 +441,31 @@ function fillDetailModal(ch) {
       if (now?.title) {
         parts.push(
           `<div class="detail-slot"><div class="detail-slot-title">${escapeHtml(now.title)}</div>` +
-          `<div class="detail-slot-time">${fmtClock(now.start)} · ${fmtClock(now.stop)}</div>` +
-          (now.desc ? `<div class="detail-slot-desc">${escapeHtml(truncate(now.desc, 520))}</div>` : '') +
-          '</div>'
+            `<div class="detail-slot-time">${fmtClock(now.start)} · ${fmtClock(now.stop)}</div>` +
+            (now.desc ? `<div class="detail-slot-desc">${escapeHtml(truncate(now.desc, 520))}</div>` : '') +
+            '</div>'
         )
       }
       if (next?.title) {
         parts.push(
           `<div class="detail-slot"><div class="detail-slot-title">Next · ${escapeHtml(next.title)}</div>` +
-          `<div class="detail-slot-time">${fmtClock(next.start)} · ${fmtClock(next.stop)}</div>` +
-          (next.desc ? `<div class="detail-slot-desc">${escapeHtml(truncate(next.desc, 320))}</div>` : '') +
-          '</div>'
+            `<div class="detail-slot-time">${fmtClock(next.start)} · ${fmtClock(next.stop)}</div>` +
+            (next.desc ? `<div class="detail-slot-desc">${escapeHtml(truncate(next.desc, 320))}</div>` : '') +
+            '</div>'
         )
       }
       body.innerHTML = parts.join('') || '<div class="detail-slot-desc">No guide data.</div>'
     }
   }
+
+  if (urlEl) {
+    if (isXtreamCatalogSeries) urlEl.textContent = 'Loading episodes…'
+    else urlEl.textContent = ch.url.length > 200 ? `${ch.url.slice(0, 120)}…` : ch.url
+  }
+
   if (favBtn) favBtn.textContent = Pins.isFavorited(ch.url) ? 'Remove favourite' : 'Save favourite'
+
+  if (isXtreamCatalogSeries) void loadDetailSeriesEpisodes(ch)
 }
 
 /** @param {string} raw */
@@ -423,6 +495,147 @@ function toast(msg, tone = 'info') {
     el.style.transform = 'translateY(6px)'
   }, 3000)
   setTimeout(() => el.remove(), 3400)
+}
+
+/* ─────────────────────────  Xtream series & catalog URLs  ──────── */
+
+/** @param {string} playlistId @param {number} seriesId */
+function xtreamSeriesMarkerUrl(playlistId, seriesId) {
+  return `https://iptv-viewer.local/${encodeURIComponent(playlistId)}/${seriesId}`
+}
+
+/** @param {string} [url] */
+function isXtreamSeriesMarkerUrl(url) {
+  return /^https:\/\/iptv-viewer\.local\//i.test(String(url || ''))
+}
+
+/** @param {{ id: string }} pl @param {unknown} channels */
+function normalizeXtreamCatalogRows(pl, channels) {
+  const list = Array.isArray(channels) ? channels : []
+  return list.map((c) => {
+    const row = /** @type {Ch} */ (/** @type {unknown} */ (c))
+    if (row.kind === 'series' && row.seriesId != null) {
+      return { ...row, url: xtreamSeriesMarkerUrl(pl.id, Number(row.seriesId)) }
+    }
+    return row
+  })
+}
+
+/** @param {{ sourceType?: string; xtreamServer?: string; xtreamUser?: string; xtreamPass?: string }} pl */
+function xtreamCredPayload(pl) {
+  if (!pl || pl.sourceType !== 'xtream') return null
+  const server = pl.xtreamServer?.trim()
+  const username = pl.xtreamUser?.trim()
+  const password = pl.xtreamPass != null ? String(pl.xtreamPass) : ''
+  if (!server || !username || !password) return null
+  return { server, username, password }
+}
+
+/** @param {Ch} ch */
+async function fetchXtreamSeriesEpisodeData(ch) {
+  const pl = state.loadedAccountId ? getPlaylist(state.loadedAccountId) : null
+  const cred = xtreamCredPayload(pl)
+  if (!cred || ch.seriesId == null) throw new Error('Series needs an Xtream account with server, user, and password.')
+  const res = await fetch('/api/xtream/series-info', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...cred, seriesId: ch.seriesId }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || res.statusText || 'Series lookup failed')
+  return data
+}
+
+/**
+ * Turn catalogue entries (e.g. series markers) into a concrete stream + resume point.
+ * @param {Ch} ch
+ * @param {{ resumeAt?: number }} [opts]
+ */
+async function resolveWatchPlayTarget(ch, opts = {}) {
+  const k = ch.kind || 'live'
+  if (k !== 'series' || ch.seriesId == null || !isXtreamSeriesMarkerUrl(ch.url)) {
+    const resumeAt =
+      k === 'live'
+        ? Number.isFinite(opts.resumeAt)
+          ? Number(opts.resumeAt)
+          : 0
+        : Number.isFinite(opts.resumeAt)
+          ? Number(opts.resumeAt)
+          : Progress.getProgress(ch.url)?.position || 0
+    return { playCh: ch, resumeAt }
+  }
+
+  const data = await fetchXtreamSeriesEpisodeData(ch)
+  const eps = Array.isArray(data.episodes) ? data.episodes : []
+  if (!eps.length) throw new Error('No episodes for this series.')
+
+  /** @type {typeof eps[0] | null} */ let pick = null
+  let bestPos = -1
+  for (const ep of eps) {
+    const prog = Progress.getProgress(ep.url)
+    const pos = prog?.position ?? 0
+    if (pos > 60 && pos > bestPos) {
+      bestPos = pos
+      pick = ep
+    }
+  }
+  if (!pick) pick = eps[0]
+  const fromProg = Progress.getProgress(pick.url)?.position ?? 0
+  const optRa = Number.isFinite(opts.resumeAt) ? Number(opts.resumeAt) : 0
+  const resumeAt = fromProg > 30 ? fromProg : optRa
+  const playCh = { ...ch, url: pick.url, name: `${ch.name} — ${pick.title}` }
+  return { playCh, resumeAt }
+}
+
+/** @param {string} name */
+function browseSectionKindRank(name) {
+  const n = (name || '').trim()
+  if (n.startsWith('Live ·')) return 0
+  if (n.startsWith('Movies ·')) return 1
+  if (n.startsWith('Series ·')) return 2
+  return 9
+}
+
+function compareBrowseCategoryLabels(aLabel, bLabel) {
+  const ra = browseSectionKindRank(aLabel)
+  const rb = browseSectionKindRank(bLabel)
+  if (ra !== rb) return ra - rb
+  return String(aLabel).localeCompare(String(bLabel))
+}
+
+/** Daily seed so “Top picks” reshuffles once per day, not every paint */
+function shuffleDaySeed() {
+  const d = new Date()
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()
+}
+
+/** @template T @param {T[]} arr @param {number} seed0 */
+function shuffleDeterministic(arr, seed0) {
+  const out = arr.slice()
+  let seed = seed0 >>> 0
+  for (let i = out.length - 1; i > 0; i--) {
+    seed = (Math.imul(1103515245, seed) + 12345) >>> 0
+    const j = seed % (i + 1)
+    const t = out[i]
+    out[i] = out[j]
+    out[j] = t
+  }
+  return out
+}
+
+function vodAndSeriesTopRatedPool() {
+  const v = pickFromKind('vod')
+  const s = pickFromKind('series')
+  return shuffleDeterministic([...v.slice(0, 500), ...s.slice(0, 500)], shuffleDaySeed())
+}
+
+/** @param {number} tail */
+function recentlyAddedPosterPool(tail = 220) {
+  const v = pickFromKind('vod')
+  const s = pickFromKind('series')
+  const merged = [...v.slice(-tail), ...s.slice(-tail)]
+  merged.reverse()
+  return merged.slice(0, 48)
 }
 
 /* ─────────────────────────  Theme & settings apply  ─────────────── */
@@ -638,54 +851,66 @@ function setWatchStatus(msg, tone = 'info') {
  * @param {{ queue?: Ch[]; resumeAt?: number }} [opts]
  */
 function openWatch(ch, opts = {}) {
-  state.playingCh = ch
-  state.playingUrl = ch.url
-  state.playingQueue = (opts.queue || []).filter((c) => c.url !== ch.url).slice(0, 30)
-  setRoute('watch')
-  // Update titles
-  const t = $('watch-title')
-  const s = $('watch-sub')
-  const pt = $('player-title')
-  const ps = $('player-subtitle')
-  if (t) t.textContent = ch.name
-  if (s) s.textContent = `${ch.group || 'Uncategorised'} · ${(ch.kind || 'live').toUpperCase()}`
-  if (pt) pt.textContent = ch.name
-  if (ps) ps.textContent = ch.group || ''
-  syncPlayerFavIcon()
-  renderUpNext()
-  setWatchStatus('Loading stream…')
-  setLoadingOverlay(true)
-
-  const video = /** @type {HTMLVideoElement | null} */ ($('player'))
-  if (!video) return
-  video.volume = clamp(Number(settingsState.current.playerVolume) || 1, 0, 1)
-  $('player-volume') && (/** @type {HTMLInputElement} */ ($('player-volume')).value = String(video.volume))
-  attachStream(ch.url, video).then(
-    () => {
-      const tryResume = () => {
-        const target = Number.isFinite(opts.resumeAt) ? Number(opts.resumeAt) : null
-        if (target && target > 5 && Number.isFinite(video.duration) && video.duration > target + 4) {
-          try { video.currentTime = target } catch { /* noop */ }
-        }
-      }
-      if (video.readyState >= 1) tryResume()
-      else video.addEventListener('loadedmetadata', tryResume, { once: true })
-
-      video.play().then(
-        () => {
-          Pins.pushRecentPlayed(ch)
-          setWatchStatus('')
-          setLoadingOverlay(false)
-        },
-        () => setWatchStatus('Playback blocked or stream failed — try another channel.', 'error')
-      )
-    },
-    (e) => {
-      setLoadingOverlay(false)
-      setWatchStatus(e.message || String(e), 'error')
+  void (async () => {
+    /** @type {Ch} */ let playCh
+    /** @type {number} */ let resumeAt
+    try {
+      ;({ playCh, resumeAt } = await resolveWatchPlayTarget(ch, opts))
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+      return
     }
-  )
-  syncPlayingMarkers()
+
+    state.playingCh = playCh
+    state.playingUrl = playCh.url
+    const baseQueue = opts.queue != null ? opts.queue : sameRowQueue(ch)
+    state.playingQueue = baseQueue.filter((c) => c.url !== playCh.url).slice(0, 30)
+    setRoute('watch')
+
+    const t = $('watch-title')
+    const s = $('watch-sub')
+    const pt = $('player-title')
+    const ps = $('player-subtitle')
+    if (t) t.textContent = playCh.name
+    if (s) s.textContent = `${playCh.group || 'Uncategorised'} · ${(playCh.kind || 'live').toUpperCase()}`
+    if (pt) pt.textContent = playCh.name
+    if (ps) ps.textContent = playCh.group || ''
+    syncPlayerFavIcon()
+    renderUpNext()
+    setWatchStatus('Loading stream…')
+    setLoadingOverlay(true)
+
+    const video = /** @type {HTMLVideoElement | null} */ ($('player'))
+    if (!video) return
+    video.volume = clamp(Number(settingsState.current.playerVolume) || 1, 0, 1)
+    $('player-volume') && (/** @type {HTMLInputElement} */ ($('player-volume')).value = String(video.volume))
+    attachStream(playCh.url, video).then(
+      () => {
+        const tryResume = () => {
+          const target = Number.isFinite(resumeAt) ? resumeAt : null
+          if (target && target > 5 && Number.isFinite(video.duration) && video.duration > target + 4) {
+            try { video.currentTime = target } catch { /* noop */ }
+          }
+        }
+        if (video.readyState >= 1) tryResume()
+        else video.addEventListener('loadedmetadata', tryResume, { once: true })
+
+        video.play().then(
+          () => {
+            Pins.pushRecentPlayed(playCh)
+            setWatchStatus('')
+            setLoadingOverlay(false)
+          },
+          () => setWatchStatus('Playback blocked or stream failed — try another channel.', 'error')
+        )
+      },
+      (e) => {
+        setLoadingOverlay(false)
+        setWatchStatus(e.message || String(e), 'error')
+      }
+    )
+    syncPlayingMarkers()
+  })()
 }
 
 function setLoadingOverlay(on) {
@@ -871,16 +1096,18 @@ function bindPlayerControls() {
 function makeCard(ch, opts = {}) {
   const card = document.createElement('div')
   card.className = `card ${opts.kind === 'continue' ? 'continue' : ''}`.trim()
+  const kind = ch.kind || 'live'
+  if (kind === 'vod' || kind === 'series') card.classList.add('card--poster')
+  else card.classList.add('card--live')
   card.dataset.url = ch.url
   card.setAttribute('role', 'button')
   card.tabIndex = 0
   card.setAttribute('aria-label', `Play ${ch.name}`)
-  const kind = ch.kind || 'live'
 
   const playFromCard = () => {
     const queue = opts.queue || sameRowQueue(ch)
     let resumeAt = 0
-    if (kind !== 'live') {
+    if (kind !== 'live' && !isXtreamSeriesMarkerUrl(ch.url)) {
       const p = Progress.getProgress(ch.url)
       if (p) resumeAt = p.position
     }
@@ -924,6 +1151,28 @@ function makeCard(ch, opts = {}) {
     img.src = ch.logo
     thumb.appendChild(img)
   }
+
+  const baseSub =
+    opts.sub ||
+    ch.group ||
+    (kind === 'live' ? 'Live channel' : kind === 'vod' ? 'Movie' : 'Series')
+  const subline = getCardSubline(ch, { sub: baseSub })
+
+  const overlayLayer = document.createElement('div')
+  overlayLayer.className = 'thumb-overlay'
+  const ovGrad = document.createElement('div')
+  ovGrad.className = 'thumb-overlay-grad'
+  const ovInner = document.createElement('div')
+  ovInner.className = 'thumb-overlay-inner'
+  const ovTitle = document.createElement('div')
+  ovTitle.className = 'thumb-overlay-title'
+  ovTitle.textContent = ch.name
+  const ovSubline = document.createElement('div')
+  ovSubline.className = 'thumb-overlay-sub'
+  ovSubline.textContent = subline
+  ovInner.append(ovTitle, ovSubline)
+  overlayLayer.append(ovGrad, ovInner)
+  thumb.appendChild(overlayLayer)
 
   // Live pill / kind pill
   const pill = document.createElement('span')
@@ -982,14 +1231,10 @@ function makeCard(ch, opts = {}) {
   const name = document.createElement('div')
   name.className = 'name'
   name.textContent = ch.name
-  const baseSub =
-    opts.sub ||
-    ch.group ||
-    (kind === 'live' ? 'Live channel' : kind === 'vod' ? 'Movie' : 'Series')
   const sub = document.createElement('div')
   sub.className = 'sub'
   sub.dataset.baseSub = baseSub
-  sub.textContent = getCardSubline(ch, { sub: baseSub })
+  sub.textContent = subline
   meta.append(name, sub)
   card.appendChild(meta)
 
@@ -1000,8 +1245,11 @@ function makeCard(ch, opts = {}) {
 
 /** Build a small "Up next" queue from currently filtered channels. */
 function sameRowQueue(ch) {
-  const list = filterByContentKind(state.channels, ch.kind || 'all')
-  return list.filter((c) => c.url !== ch.url).slice(0, 24)
+  const k = ch.kind || 'live'
+  const byKind = filterByContentKind(state.channels, k)
+  const g = (ch.group || '').trim()
+  const pool = g ? byKind.filter((c) => (c.group || '').trim() === g) : byKind
+  return pool.filter((c) => c.url !== ch.url).slice(0, 24)
 }
 
 function makeSkeletonCard() {
@@ -1073,7 +1321,7 @@ function makeRow(title, items, opts = {}) {
   right.className = 'carousel-arrow right'
   right.setAttribute('aria-label', 'Scroll right')
   right.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
-  const step = () => Math.max(280, scroll.clientWidth * 0.85)
+  const step = () => Math.max(220, scroll.clientWidth * 0.92)
   left.addEventListener('click', () => scroll.scrollBy({ left: -step(), behavior: 'smooth' }))
   right.addEventListener('click', () => scroll.scrollBy({ left: step(), behavior: 'smooth' }))
   carousel.append(left, right)
@@ -1311,7 +1559,7 @@ function renderHome() {
     }
   }
 
-  // Recently watched
+  // Recently watched → “Catch up”
   if (settingsState.current.showRecents) {
     const recent = Pins.loadRecent()
     if (recent.length) {
@@ -1319,11 +1567,11 @@ function renderHome() {
         const found = state.channels.find((c) => c.url === r.url)
         return /** @type {Ch} */ (found || { name: r.name, url: r.url, logo: r.logo, group: r.group, kind: 'live' })
       })
-      rowsHost.appendChild(makeRow('Recently watched', items, { id: 'row-recent' }))
+      rowsHost.appendChild(makeRow('Catch up where you left off', items, { id: 'row-recent' }))
     }
   }
 
-  // Trending now (live)
+  // Trending → live marquee
   const live = pickFromKind('live')
   if (live.length) {
     rowsHost.appendChild(makeRow('Trending now', live.slice(0, 24), {
@@ -1332,19 +1580,34 @@ function renderHome() {
     }))
   }
 
-  // Movies
+  // Editorial-style rows for on-demand catalogue
+  const topPool = vodAndSeriesTopRatedPool()
+  if (topPool.length) {
+    rowsHost.appendChild(makeRow('Top picks for you', topPool.slice(0, 24), {
+      id: 'row-top',
+      onSeeAll: () => { state.kindFilter = 'vod'; state.favouritesOnly = false; setRoute('browse') },
+    }))
+  }
+
+  const recentAdded = recentlyAddedPosterPool()
+  if (recentAdded.length) {
+    rowsHost.appendChild(makeRow('Recently added', recentAdded.slice(0, 24), {
+      id: 'row-recent-added',
+      onSeeAll: () => { state.kindFilter = 'all'; state.favouritesOnly = false; setRoute('browse') },
+    }))
+  }
+
   const movies = pickFromKind('vod')
   if (movies.length) {
-    rowsHost.appendChild(makeRow('Movies for you', movies.slice(0, 24), {
+    rowsHost.appendChild(makeRow('Popular movies', movies.slice(0, 24), {
       id: 'row-movies',
       onSeeAll: () => { state.kindFilter = 'vod'; state.favouritesOnly = false; setRoute('browse') },
     }))
   }
 
-  // Series
   const series = pickFromKind('series')
   if (series.length) {
-    rowsHost.appendChild(makeRow('Binge-worthy series', series.slice(0, 24), {
+    rowsHost.appendChild(makeRow('Popular series', series.slice(0, 24), {
       id: 'row-series',
       onSeeAll: () => { state.kindFilter = 'series'; state.favouritesOnly = false; setRoute('browse') },
     }))
@@ -1365,31 +1628,10 @@ function renderHome() {
     }
   }
 
-  // Categories from group titles (max 6)
-  if (state.channels.length) {
-    /** @type {Map<string, Ch[]>} */
-    const groups = new Map()
-    for (const c of state.channels) {
-      const k = (c.group || '').trim()
-      if (!k) continue
-      if (!groups.has(k)) groups.set(k, [])
-      const arr = groups.get(k)
-      if (arr) arr.push(c)
-    }
-    const popular = [...groups.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 5)
-    for (const [name, list] of popular) {
-      if (list.length < 4) continue
-      rowsHost.appendChild(makeRow(name, list.slice(0, 24), {
-        id: `row-grp-${encodeURIComponent(name).slice(0, 32)}`,
-        onSeeAll: () => { state.searchTerm = name; const s = $('browse-search'); if (s instanceof HTMLInputElement) s.value = name; setRoute('browse') },
-      }))
-    }
-  }
-
-  // Loading skeletons (when an account is configured but channels aren't loaded yet)
+  // When an account is configured but channels aren't loaded yet
   if (!state.channels.length && state.isLoading) {
     rowsHost.appendChild(makeRow('Trending now', [], { skeleton: true }))
-    rowsHost.appendChild(makeRow('Movies for you', [], { skeleton: true }))
+    rowsHost.appendChild(makeRow('Popular movies', [], { skeleton: true }))
   }
 
   // Subtle "Add account" CTA at the bottom if there's room
@@ -1419,6 +1661,8 @@ function renderHome() {
 function renderBrowse() {
   syncBrowseChips()
   updateChipCounts()
+  const bsSync = $('browse-search')
+  if (bsSync instanceof HTMLInputElement) state.searchTerm = bsSync.value
   const meta = $('browse-meta')
   const empty = $('browse-empty')
   const content = $('browse-content')
@@ -1494,7 +1738,11 @@ function renderBrowse() {
       const arr = groups.get(k)
       if (arr) arr.push(c)
     }
-    const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length)
+    const sorted = [...groups.entries()].sort((a, b) => {
+      const byKind = compareBrowseCategoryLabels(a[0], b[0])
+      if (byKind !== 0) return byKind
+      return b[1].length - a[1].length
+    })
     for (const [name, items] of sorted) {
       rowsHost.appendChild(makeRow(name, items.slice(0, 30), {
         sub: () => name,
@@ -1564,8 +1812,19 @@ async function loadAccount(pl, { silent = false } = {}) {
     if (pl.sourceType === 'm3u-url') {
       const u = pl.m3uUrl?.trim()
       if (!u) throw new Error('Missing M3U URL')
-      const body = await fetchPlaylistUrl(u)
-      applyChannels(parseM3u(body), { accountId: pl.id })
+      if (extractXtreamFromPortalUrl(u)) {
+        const res = await fetch('/api/xtream/catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ portalUrl: u }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || res.statusText)
+        applyChannels(normalizeXtreamCatalogRows(pl, data.channels || []), { accountId: pl.id })
+      } else {
+        const body = await fetchPlaylistUrl(u)
+        applyChannels(parseM3u(body), { accountId: pl.id })
+      }
     } else if (pl.sourceType === 'm3u-inline') {
       applyChannels(parseM3u(pl.m3uText || ''), { accountId: pl.id })
     } else {
@@ -1580,7 +1839,7 @@ async function loadAccount(pl, { silent = false } = {}) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || res.statusText)
-      applyChannels(data.channels || [], { accountId: pl.id })
+      applyChannels(normalizeXtreamCatalogRows(pl, data.channels || []), { accountId: pl.id })
     }
     setActivePlaylistId(pl.id)
     syncNav()
@@ -1816,16 +2075,37 @@ function submitAccountForm(e) {
   if (sourceType === 'm3u-url') {
     const m3uUrl = /** @type {HTMLInputElement} */ ($('pl-m3u-url')).value.trim()
     if (!m3uUrl) { showFormError('Enter the M3U URL.'); return }
-    saved = upsertPlaylist({ id: idOpt, name, sourceType: 'm3u-url', m3uUrl })
+    const portal = extractXtreamFromPortalUrl(m3uUrl)
+    if (portal) {
+      saved = upsertPlaylist({
+        id: idOpt,
+        name,
+        sourceType: 'xtream',
+        xtreamServer: portal.base,
+        xtreamUser: portal.username,
+        xtreamPass: portal.password,
+      })
+    } else {
+      saved = upsertPlaylist({ id: idOpt, name, sourceType: 'm3u-url', m3uUrl })
+    }
   } else if (sourceType === 'm3u-inline') {
     const m3uText = /** @type {HTMLTextAreaElement} */ ($('pl-m3u-text')).value
     if (!m3uText.trim()) { showFormError('Paste or upload the M3U playlist text.'); return }
     saved = upsertPlaylist({ id: idOpt, name, sourceType: 'm3u-inline', m3uText })
   } else {
-    const xtreamServer = /** @type {HTMLInputElement} */ ($('pl-xc-server')).value.trim()
-    const xtreamUser = /** @type {HTMLInputElement} */ ($('pl-xc-user')).value.trim()
-    const xtreamPass = /** @type {HTMLInputElement} */ ($('pl-xc-pass')).value
-    if (!xtreamServer || !xtreamUser || !xtreamPass) { showFormError('Fill server URL, username, and password.'); return }
+    let xtreamServer = /** @type {HTMLInputElement} */ ($('pl-xc-server')).value.trim()
+    let xtreamUser = /** @type {HTMLInputElement} */ ($('pl-xc-user')).value.trim()
+    let xtreamPass = /** @type {HTMLInputElement} */ ($('pl-xc-pass')).value
+    const fromPortal = extractXtreamFromPortalUrl(xtreamServer)
+    if (fromPortal) {
+      xtreamServer = fromPortal.base
+      xtreamUser = fromPortal.username
+      xtreamPass = fromPortal.password
+    }
+    if (!xtreamServer || !xtreamUser || !xtreamPass) {
+      showFormError('Provide server URL, username, password — or paste a full Xtream portal link (…/get.php?username=…&password=…) in Server URL.')
+      return
+    }
     saved = upsertPlaylist({ id: idOpt, name, sourceType: 'xtream', xtreamServer, xtreamUser, xtreamPass })
   }
   if (saved && !getActivePlaylistId()) setActivePlaylistId(saved.id)
@@ -1895,6 +2175,60 @@ function renderSettingsForm() {
 
 /* ─────────────────────────  Bindings  ───────────────────────────── */
 
+function browseScopedLibraryForSearch() {
+  return state.favouritesOnly ? favouritesList() : pickFromKind(state.kindFilter)
+}
+
+/** @param {Ch[]} list @param {string} query */
+function filterBySearchToken(list, query) {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  return list.filter(
+    (c) =>
+      c.name.toLowerCase().includes(q) ||
+      (c.group && c.group.toLowerCase().includes(q)) ||
+      c.url.toLowerCase().includes(q),
+  )
+}
+
+/** @param {Ch} ch @param {(c: Ch) => void} onPick */
+function buildSearchDdItem(ch, onPick) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'search-dd-item'
+  btn.setAttribute('role', 'option')
+
+  btn.addEventListener('mousedown', (e) => e.preventDefault())
+
+  const meta = document.createElement('div')
+  meta.className = 'search-dd-meta'
+  const t = document.createElement('div')
+  t.className = 'search-dd-title'
+  t.textContent = ch.name
+  const s = document.createElement('div')
+  s.className = 'search-dd-sub'
+  const k = ch.kind || 'live'
+  s.textContent = ch.group || (k === 'live' ? 'Live' : k === 'vod' ? 'Movie' : 'Series')
+  meta.append(t, s)
+
+  if (ch.logo) {
+    const img = document.createElement('img')
+    img.alt = ''
+    img.referrerPolicy = 'no-referrer'
+    img.src = ch.logo
+    img.className = k === 'live' ? 'search-dd-live' : 'search-dd-thumb'
+    btn.append(img, meta)
+  } else {
+    const ph = document.createElement('div')
+    ph.className = k === 'live' ? 'search-dd-live' : 'search-dd-thumb'
+    ph.style.background = 'linear-gradient(135deg,var(--surface-3),var(--surface))'
+    btn.append(ph, meta)
+  }
+
+  btn.addEventListener('click', () => onPick(ch))
+  return btn
+}
+
 function bindNav() {
   $$('.nav-item').forEach((b) => b.addEventListener('click', () => {
     const route = /** @type {AppRoute} */ (b.dataset.route)
@@ -1919,27 +2253,85 @@ function bindNav() {
     brand.addEventListener('click', () => setRoute('home'))
   }
 
-  // Top-bar global search
+  // Top-bar global search: instant dropdown; Enter jumps to Browse with filters applied
   const gs = /** @type {HTMLInputElement | null} */ ($('global-search'))
-  if (gs) {
+  const gdd = /** @type {HTMLElement | null} */ ($('nav-search-dropdown'))
+  if (gs && gdd) {
     let t = null
+    const renderDd = () => {
+      const hits = filterBySearchToken(state.channels, gs.value).slice(0, 14)
+      gdd.innerHTML = ''
+      if (!gs.value.trim() || hits.length === 0) {
+        gdd.hidden = true
+        gs.setAttribute('aria-expanded', 'false')
+        return
+      }
+      gs.setAttribute('aria-expanded', 'true')
+      for (const ch of hits)
+        gdd.appendChild(
+          buildSearchDdItem(ch, (c) => {
+            gdd.hidden = true
+            gs.setAttribute('aria-expanded', 'false')
+            openWatch(c, { queue: sameRowQueue(c) })
+          })
+        )
+      gdd.hidden = false
+    }
+
     gs.addEventListener('input', () => {
-      state.searchTerm = gs.value || ''
       if (t) clearTimeout(t)
-      t = setTimeout(() => {
-        if (state.route !== 'browse') {
-          state.kindFilter = 'all'
-          state.favouritesOnly = false
-          setRoute('browse')
-          const bs = $('browse-search')
-          if (bs instanceof HTMLInputElement) bs.value = state.searchTerm
-        } else {
-          renderBrowse()
-        }
-      }, 180)
+      t = setTimeout(() => renderDd(), 90)
       void ensureLibraryLoaded()
     })
+
+    gs.addEventListener('focus', () => {
+      renderDd()
+    })
+
+    gs.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        gdd.hidden = true
+        gs.setAttribute('aria-expanded', 'false')
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        gdd.hidden = true
+        gs.setAttribute('aria-expanded', 'false')
+        const q = gs.value.trim()
+        state.searchTerm = q
+        state.kindFilter = 'all'
+        state.favouritesOnly = false
+        const bs = $('browse-search')
+        if (bs instanceof HTMLInputElement) bs.value = q
+        setRoute('browse')
+      }
+    })
   }
+
+  const navSearchWrap = () =>
+    $('nav-search-wrap') ?? /** @type {HTMLElement | null} */ (document.querySelector('.nav-search-wrap'))
+  const browseToolbar = () =>
+    $('browse-toolbar') ?? /** @type {HTMLElement | null} */ (document.querySelector('.browse-toolbar'))
+
+  const closeMenusOnOutside = (/** @type {Event} */ e) => {
+    const t = /** @type {EventTarget | null} */ (e.target)
+    if (!(t instanceof Node)) return
+    const nw = navSearchWrap()
+    if (nw instanceof HTMLElement && !nw.contains(t)) {
+      const dd = $('nav-search-dropdown')
+      const gsEl = $('global-search')
+      if (dd) dd.hidden = true
+      if (gsEl instanceof HTMLInputElement) gsEl.setAttribute('aria-expanded', 'false')
+    }
+    const tb = browseToolbar()
+    if (tb instanceof HTMLElement && !tb.contains(t)) {
+      const bsd = $('browse-search-dropdown')
+      const bsEl = $('browse-search')
+      if (bsd) bsd.hidden = true
+      if (bsEl instanceof HTMLInputElement) bsEl.setAttribute('aria-expanded', 'false')
+    }
+  }
+  document.addEventListener('pointerdown', closeMenusOnOutside, { passive: true })
 }
 
 function bindBrowse() {
@@ -1961,7 +2353,51 @@ function bindBrowse() {
   })
 
   const search = /** @type {HTMLInputElement | null} */ ($('browse-search'))
-  if (search) {
+  const bdd = /** @type {HTMLElement | null} */ ($('browse-search-dropdown'))
+  if (search && bdd) {
+    let t = null
+    const renderBd = () => {
+      state.searchTerm = search.value || ''
+      bdd.innerHTML = ''
+      const trimmed = search.value.trim()
+      if (!trimmed) {
+        bdd.hidden = true
+        search.setAttribute('aria-expanded', 'false')
+        renderBrowse()
+        return
+      }
+      const pool = browseScopedLibraryForSearch()
+      const hits = filterBySearchToken(pool, search.value).slice(0, 14)
+      if (!hits.length) {
+        bdd.hidden = true
+        search.setAttribute('aria-expanded', 'false')
+        renderBrowse()
+        return
+      }
+      search.setAttribute('aria-expanded', 'true')
+      for (const ch of hits)
+        bdd.appendChild(
+          buildSearchDdItem(ch, (c) => {
+            bdd.hidden = true
+            search.setAttribute('aria-expanded', 'false')
+            openWatch(c, { queue: sameRowQueue(c) })
+          })
+        )
+      bdd.hidden = false
+      renderBrowse()
+    }
+    search.addEventListener('focus', () => renderBd())
+    search.addEventListener('input', () => {
+      if (t) clearTimeout(t)
+      t = setTimeout(() => renderBd(), 110)
+    })
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        bdd.hidden = true
+        search.setAttribute('aria-expanded', 'false')
+      }
+    })
+  } else if (search) {
     let t = null
     search.addEventListener('input', () => {
       if (t) clearTimeout(t)
