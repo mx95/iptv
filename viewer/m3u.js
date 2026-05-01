@@ -1,4 +1,4 @@
-/** @typedef {{ name: string; url: string; logo?: string; group?: string }} M3uEntry */
+/** @typedef {{ name: string; url: string; logo?: string; group?: string; tvgId?: string }} M3uEntry */
 
 /** @type {(line: string) => Record<string, string>} */
 function parseExtinfAttrs(seg) {
@@ -34,10 +34,12 @@ export function parseM3u(raw) {
       const meta = lastComma >= 0 ? rest.slice(0, lastComma) : rest
       const title = lastComma >= 0 ? rest.slice(lastComma + 1).trim() : ''
       const attrs = parseExtinfAttrs(meta)
+      const tvgId = attrs['tvg-id']?.trim()
       pending = {
         name: (attrs['tvg-name'] || title || 'Unknown').trim(),
         logo: attrs['tvg-logo'] || attrs.logo,
         group: attrs['group-title'],
+        ...(tvgId ? { tvgId } : {}),
       }
       continue
     }
@@ -53,6 +55,7 @@ export function parseM3u(raw) {
         url,
         logo: pending.logo,
         group: pending.group,
+        ...(pending.tvgId ? { tvgId: pending.tvgId } : {}),
       })
       pending = null
     } else {

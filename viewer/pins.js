@@ -84,12 +84,6 @@ export function saveRecent(rows) {
   writeArr(STORAGE_REC, rows.slice(0, MAX_RECENT))
 }
 
-/** @returns {PinCh[]} */
-export function clearRecent() {
-  saveRecent([])
-  return []
-}
-
 /**
  * Toggle favorite by URL (returns next state: true if favorited).
  * @param {PinCh} ch
@@ -127,4 +121,9 @@ export function pushRecentPlayed(ch) {
 /** Clear remembered recent playback list. */
 export function clearRecent() {
   saveRecent([])
+}
+
+/** Clear all favourites from the device. */
+export function clearFavorites() {
+  saveFavorites([])
 }

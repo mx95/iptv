@@ -17,6 +17,10 @@ const MAX_PLAYLIST_BYTES =
   process.env.VIEWER_MAX_PLAYLIST_BYTES != null && process.env.VIEWER_MAX_PLAYLIST_BYTES !== ''
     ? Number(process.env.VIEWER_MAX_PLAYLIST_BYTES)
     : Number(process.env.VIEWER_MAX_PLAYLIST_MB ?? '120') * 1024 * 1024
+const MAX_EPG_BYTES =
+  process.env.VIEWER_MAX_EPG_BYTES != null && process.env.VIEWER_MAX_EPG_BYTES !== ''
+    ? Number(process.env.VIEWER_MAX_EPG_BYTES)
+    : Number(process.env.VIEWER_MAX_EPG_MB ?? '40') * 1024 * 1024
 const FETCH_TIMEOUT_MS = Number(process.env.VIEWER_FETCH_TIMEOUT_MS || 300_000)
 const PLAYLIST_FETCH_ATTEMPTS = Math.max(1, Number(process.env.VIEWER_FETCH_RETRIES || '4'))
 const DEFAULT_PLAYLIST_UA =
@@ -38,6 +42,25 @@ function isRetriablePlaylistStatus(status: number) {
   )
 }
 
+/** User-facing playlist fetch failures (non‑2xx or unusable body). */
+function playlistFetchFailureExplain(status: number): string {
+  let suffix = ''
+  if (status >= 880 && status <= 899) suffix = 'often a CDN/WAF proprietary block.'
+  else if (status === 403 || status === 451)
+    suffix = 'often geo, IP denylist, or datacenter blocking.'
+  else suffix = 'the server did not return a usable playlist.'
+  return `Upstream HTTP ${status}: ${suffix} If the URL opens in your browser, paste the M3U text here, or add the portal as Xtream; home/VPN IPs are less often blocked than server proxies.`
+}
+
+function looksLikeHtmlNotM3u(text: string): boolean {
+  const t = text.replace(/^\uFEFF/, '').trimStart()
+  if (!t.startsWith('<')) return false
+  const head = t.slice(0, 800).toLowerCase()
+  return (
+    /<html[\s>]/.test(head) || /<\!doctype/.test(head) || /<meta[\s]/.test(head) || /<body[\s>]/.test(head)
+  )
+}
+
 function isRetriableAxiosError(e: unknown) {
   if (!axios.isAxiosError(e)) return false
   const c = e.code
@@ -47,7 +70,7 @@ function isRetriableAxiosError(e: unknown) {
   return s !== undefined && isRetriablePlaylistStatus(s)
 }
 
-async function fetchPlaylistFromUpstream(url: string, userAgent?: string) {
+async function fetchTextFromUpstream(url: string, userAgent: string | undefined, maxBytes: number) {
   const headers: Record<string, string> = {
     Accept: 'text/plain,*/*;q=0.9',
     'Accept-Language': 'en-US,en;q=0.9',
@@ -59,8 +82,8 @@ async function fetchPlaylistFromUpstream(url: string, userAgent?: string) {
       const r = await axios.get(url, {
         responseType: 'text',
         timeout: FETCH_TIMEOUT_MS,
-        maxContentLength: MAX_PLAYLIST_BYTES,
-        maxBodyLength: MAX_PLAYLIST_BYTES,
+        maxContentLength: maxBytes,
+        maxBodyLength: maxBytes,
         validateStatus: () => true,
         headers,
         transitional: { clarifyTimeoutError: true },
@@ -81,6 +104,10 @@ async function fetchPlaylistFromUpstream(url: string, userAgent?: string) {
     }
   }
   throw lastErr
+}
+
+function fetchPlaylistFromUpstream(url: string, userAgent?: string) {
+  return fetchTextFromUpstream(url, userAgent, MAX_PLAYLIST_BYTES)
 }
 
 function sendJson(res, code, obj) {
@@ -135,7 +162,13 @@ function serveStatic(urlPath, res) {
       res.end('Not found')
       return
     }
-    res.writeHead(200, { 'Content-Type': contentType(abs) })
+    // Dev viewer — never let the browser cache stale modules.
+    res.writeHead(200, {
+      'Content-Type': contentType(abs),
+      'Cache-Control': 'no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    })
     res.end(data)
   })
 }
@@ -144,6 +177,94 @@ function normalizeXtreamBase(server) {
   const u = safeUrl(server)
   if (!u) return null
   return u.replace(/\/+$/, '')
+}
+
+async function handleEpgFetch(req, res) {
+  let raw
+  try {
+    raw = await readBody(req, 32_768)
+  } catch (e) {
+    sendJson(res, 400, { error: String((e as Error).message) })
+    return
+  }
+  let body: { url?: string; userAgent?: string }
+  try {
+    body = JSON.parse(raw)
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON' })
+    return
+  }
+  const url = safeUrl(String(body.url || ''))
+  if (!url) {
+    sendJson(res, 400, { error: 'Invalid or missing url (http/https only)' })
+    return
+  }
+  try {
+    const customUa = typeof body.userAgent === 'string' ? body.userAgent : undefined
+    const r = await fetchTextFromUpstream(url, customUa, MAX_EPG_BYTES)
+    if (r.status < 200 || r.status >= 300) {
+      sendJson(res, 502, { error: `Upstream HTTP ${r.status}` })
+      return
+    }
+    const text = typeof r.data === 'string' ? r.data : String(r.data)
+    sendJson(res, 200, { body: text })
+  } catch (e) {
+    const msg = axios.isAxiosError(e) ? e.message : String((e as Error).message)
+    sendJson(res, 502, { error: msg })
+  }
+}
+
+async function handleXtreamShortEpg(req, res) {
+  let raw: string
+  try {
+    raw = await readBody(req, 16_384)
+  } catch (e) {
+    sendJson(res, 400, { error: String((e as Error).message) })
+    return
+  }
+  let body: { server?: string; username?: string; password?: string; streamIds?: unknown }
+  try {
+    body = JSON.parse(raw)
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON' })
+    return
+  }
+  const base = normalizeXtreamBase(String(body.server || ''))
+  const username = String(body.username || '')
+  const password = String(body.password || '')
+  const rawIds = Array.isArray(body.streamIds) ? body.streamIds : []
+  /** @type {number[]} */
+  const streamIds = rawIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n >= 1).slice(0, 40)
+  if (!base || !username || !password || !streamIds.length) {
+    sendJson(res, 400, { error: 'server, username, password, and streamIds required' })
+    return
+  }
+  try {
+    const authUrl = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    const auth = await axios.get(authUrl, { timeout: 30_000, validateStatus: () => true })
+    const a = auth.data?.user_info?.auth
+    const authed = auth.status === 200 && a !== undefined && `${a}` === '1'
+    if (!authed) {
+      sendJson(res, 401, { error: 'Xtream authentication failed' })
+      return
+    }
+    /** @type {Record<string, unknown[]>} */
+    const byStreamId: Record<string, unknown[]> = {}
+    await Promise.all(
+      streamIds.map(async (sid) => {
+        const u = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&action=get_short_epg&stream_id=${sid}&limit=3`
+        const r = await axios.get(u, { timeout: 20_000, validateStatus: () => true })
+        if (r.status !== 200) return
+        const list = r.data?.epg_listings
+        if (!Array.isArray(list) || list.length === 0) return
+        byStreamId[String(sid)] = list.slice(0, 6)
+      })
+    )
+    sendJson(res, 200, { byStreamId })
+  } catch (e) {
+    const msg = axios.isAxiosError(e) ? e.message : String((e as Error).message)
+    sendJson(res, 502, { error: msg })
+  }
 }
 
 async function handlePlaylistFetch(req, res) {
@@ -170,10 +291,24 @@ async function handlePlaylistFetch(req, res) {
     const customUa = typeof body.userAgent === 'string' ? body.userAgent : undefined
     const r = await fetchPlaylistFromUpstream(url, customUa)
     if (r.status < 200 || r.status >= 300) {
-      sendJson(res, 502, { error: `Upstream HTTP ${r.status}` })
+      sendJson(res, 502, { error: playlistFetchFailureExplain(r.status) })
       return
     }
     const text = typeof r.data === 'string' ? r.data : String(r.data)
+    if (!text.trim()) {
+      sendJson(res, 502, {
+        error:
+          'Playlist response was empty. The provider may block this machine’s IP — try Paste M3U after downloading in your browser, or Xtream.',
+      })
+      return
+    }
+    if (looksLikeHtmlNotM3u(text)) {
+      sendJson(res, 502, {
+        error:
+          'Response looks like HTML, not an M3U playlist (blocked or error page). If the URL works in a browser on your network, copy the playlist and use Paste M3U, or try Xtream credentials.',
+      })
+      return
+    }
     sendJson(res, 200, { body: text })
   } catch (e) {
     const msg = axios.isAxiosError(e) ? e.message : String(/** @type {Error} */ (e).message)
@@ -310,12 +445,39 @@ async function handleXtreamCatalog(req, res) {
   }
 }
 
+function safeRequestPath(rawUrl: string | undefined) {
+  const raw = rawUrl || '/'
+  try {
+    return new URL(raw, `http://127.0.0.1:${PORT}`).pathname
+  } catch {
+    // Malformed request-target (e.g. '//', proxy probes). Strip query manually.
+    const noQuery = raw.split('?')[0]
+    if (!noQuery || !noQuery.startsWith('/')) return '/'
+    return noQuery
+  }
+}
+
 const server = http.createServer((req, res) => {
-  const u = new URL(req.url || '/', `http://127.0.0.1:${PORT}`)
-  const p = u.pathname
+  let p: string
+  try {
+    p = safeRequestPath(req.url)
+  } catch (e) {
+    res.writeHead(400)
+    res.end('Bad request')
+    console.warn('viewer: bad request URL', req.url, (e as Error).message)
+    return
+  }
 
   if (req.method === 'POST' && p === '/api/playlist/fetch') {
     void handlePlaylistFetch(req, res)
+    return
+  }
+  if (req.method === 'POST' && p === '/api/epg/fetch') {
+    void handleEpgFetch(req, res)
+    return
+  }
+  if (req.method === 'POST' && p === '/api/xtream/short-epg') {
+    void handleXtreamShortEpg(req, res)
     return
   }
   if (req.method === 'POST' && p === '/api/xtream/channels') {
@@ -335,6 +497,19 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404)
   res.end('Not found')
+})
+
+server.on('clientError', (err, socket) => {
+  console.warn('viewer: client error', (err as Error).message)
+  try {
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
+  } catch {
+    /* socket already gone */
+  }
+})
+
+server.on('error', (err) => {
+  console.error('viewer: server error', err)
 })
 
 server.listen(PORT, HOST, () => {

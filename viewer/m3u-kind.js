@@ -4,7 +4,7 @@
  * @typedef {'live' | 'vod' | 'series'} ContentKind
  */
 
-/** @typedef {{ name: string; url: string; logo?: string; group?: string; kind?: ContentKind }} Ch */
+/** @typedef {{ name: string; url: string; logo?: string; group?: string; kind?: ContentKind; tvgId?: string }} Ch */
 
 /**
  * @param {Ch} ch
@@ -24,7 +24,7 @@ export function detectContentKind(ch) {
   if (/\|\s*series\b|\bseries\s*\||\bseries\s*[-|·]/i.test(blob)) return 'series'
   if (/\/series\//i.test(u) || /[?&]type=series\b/i.test(u)) return 'series'
 
-  if (/\b(24/?7|24-7|live\s*tv|live\s*channel|\.ts\b|timeshift|catch[- ]?up)\b/i.test(blob)) return 'live'
+  if (/\b(24\/?7|24-7|live\s*tv|live\s*channel|\.ts\b|timeshift|catch[- ]?up)\b/i.test(blob)) return 'live'
   if (/\/live\//i.test(u)) return 'live'
 
   if (/\b(vod|movie|movies|film|cinema|uhd|4k|hdr|box office|on demand)\b/i.test(blob)) return 'vod'
